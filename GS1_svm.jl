@@ -1,7 +1,11 @@
 function GS1_project(x, g, L, l, upper, y)
-    lower=l*ones(size(y,1))
-    indices = findall(y .== -1)
-    lower[indices] .= - upper
+    # lower=l*ones(size(y,1))
+    # indices = findall(y .== -1)
+    # lower[indices] .= - upper
+
+    # Experiment setting -u <= q_i <= u
+    lower = -upper * ones(size(y, 1))
+
     # sorting the gradient
     sortidx = sortperm(g, rev=true)
     g .= g[sortidx]

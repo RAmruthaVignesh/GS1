@@ -9,9 +9,11 @@ using Missings
 using LIBSVM
 using Optim
 using RDatasets
+include("custom_solvers.jl")
+# using solve_alpha_with_sum_constraint
 
 
-Random.seed!(123);
+Random.seed!(1234);
 
 # IRIS dataset
 iris = dataset("datasets", "iris")
@@ -318,7 +320,7 @@ function svm_predict_kernel(X_support, y_support, alphas, b, X_test; kernel=rbf_
     for i in 1:length(y_pred)
         s = 0.0
         for j in 1:length(alphas)
-            s += alphas[j] * y_support[j]* (kernel(X_support[j, :]', X_test[i, :]', 0.5)[1] + b)
+            s += alphas[j] * y_support[j] * (kernel(X_support[j, :]', X_test[i, :]', 0.5)[1] + b)
         end
         y_pred[i] = sign(s)
     end
@@ -329,24 +331,19 @@ end
 function main()
 
     # Dual SVM block coordinate descent with linear equality and box constraint
-    half_n = div(n, 2)
-    q = zeros(n)  # Initialize q with zeros
-    # Determine the number of -0.1 values needed based on the number of -1 labels in y_train
-    num_minus_0_1 = sum(y_train .== -1)
-    # Set half of them to 0.1 and the other half to -0.1
-    q[y_train .== -1][1:div(num_minus_0_1, 2)] .= -0.1
-    q[y_train .== 1][1:div(num_minus_0_1, 2)] .= 0.1
-    # q = fill(0.1, n)
-    # q[shuffle(1:n)[1:half_n]] .= -0.1
-    # # q = zeros(n)
-    alpha = q ./ y_train
-    alpha = reshape(alpha, :, 1)
+
+    # Find the initial value of alpha 
     C = 1.0
+    alpha = solve_alpha_with_sum_constraint(C, y_train)
+    alpha = reshape(alpha, :, 1)
+
+    # Initialize q based on alpha
+    q = alpha .* y_train
     lower = 0
     upper = C
     maxIter = 100
     # gamma = 1 / length(X_train)
-    gamma= 0.5
+    gamma = 0.5
     # f(alpha) = sum(alpha[i] for i in 1:n) - 0.5 * sum(alpha[i] * alpha[j] * y[i] * y[j] * (X[i, :] ⋅ X[j, :]) for i in 1:n, j in 1:n) - lambda * sum(alpha)
 
     # Use the non-kernel implementation
