@@ -1,10 +1,13 @@
-function GS1_project(x, g, L, l, upper, y)
+function GS1_project(x, g, L, l, u, y)
     # lower=l*ones(size(y,1))
-    # indices = findall(y .== -1)
-    # lower[indices] .= - upper
+    # upper = u*ones(size(y,1))
+    # indices_l = findall(y .== -1)
+    # lower[indices_l] .= -u
+    # upper[indices_l] .= l
 
     # Experiment setting -u <= q_i <= u
-    lower = -upper * ones(size(y, 1))
+    lower = -u * ones(size(y, 1))
+    upper = u*ones(size(y,1))
 
     # sorting the gradient
     sortidx = sortperm(g, rev=true)
@@ -57,7 +60,7 @@ function GS1_project(x, g, L, l, upper, y)
             break
         end
 
-        if (x[i] + sum_xlower - delta >= lower[i]) && (x[j] - sum_xupper + delta <= upper)
+        if (x[i] + sum_xlower - delta >= lower[i]) && (x[j] - sum_xupper + delta <= upper[j])
             println("Variables $i and $j moving to interior")
             d[i] = sum_xlower - delta # done
             count_interior += 1
@@ -68,10 +71,10 @@ function GS1_project(x, g, L, l, upper, y)
             break
         end # done
 
-        if (x[i] + sum_xlower - delta < lower[i]) && (x[j] - sum_xupper + delta > upper)
+        if (x[i] + sum_xlower - delta < lower[i]) && (x[j] - sum_xupper + delta > upper[j])
             println("Both $i and $j want to leave set, ")
             diff1 = lower[i] - (x[i] + sum_xlower - delta)
-            diff2 = (x[j] - sum_xupper + delta) - upper
+            diff2 = (x[j] - sum_xupper + delta) - upper[j]
             if diff1 > diff2
                 println("moving lower variable $i to bound")
                 d[i] = lower[i] - x[i] # done
@@ -80,9 +83,9 @@ function GS1_project(x, g, L, l, upper, y)
                 i += 1
             else
                 println("moving upper variable $j to bound")
-                d[j] = upper - x[j] # done
+                d[j] = upper[j] - x[j] # done
                 counter += 1
-                sum_xupper += upper - x[j]
+                sum_xupper += upper[j] - x[j]
                 j -= 1
             end
         elseif x[i] + sum_xlower - delta < lower[i]
@@ -93,9 +96,9 @@ function GS1_project(x, g, L, l, upper, y)
             i += 1
         else
             println("Moving upper variable $j to bound")
-            d[j] = upper - x[j] # done
+            d[j] = upper[j] - x[j] # done
             counter += 1
-            sum_xupper += upper - x[j] # done
+            sum_xupper += upper[j] - x[j] # done
             j -= 1
         end
     end
@@ -116,6 +119,10 @@ function GS1_project(x, g, L, l, upper, y)
     # now recover the original values
     x_orig[sortidx] .= x
     alpha = x_orig ./ y
+    if any(alpha .< 0)
+        println("Check constraints")
+        sleep(0.5)
+    end
 
-    return alpha, x, num_interior_vars, num_vars_updated
+    return alpha, x_orig, num_interior_vars, num_vars_updated
 end
