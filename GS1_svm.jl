@@ -119,10 +119,10 @@ function GS1_project(x, g, L, l, u, y)
     # now recover the original values
     x_orig[sortidx] .= x
     alpha = x_orig ./ y
-    if any(alpha .< 0)
-        println("Check constraints")
-        sleep(0.5)
-    end
+    # if any(alpha .< 0)
+    #     println("Check constraints")
+    #     sleep(0.5)
+    # end
 
     return alpha, x_orig, num_interior_vars, num_vars_updated
 end

@@ -9,48 +9,21 @@ using Missings
 using LIBSVM
 using Optim
 using RDatasets
+include("preprocess_dataset.jl")
 include("custom_solvers.jl")
+include("GS1_svm.jl")
+include("GSS_SVM.jl")
+include("GSQ_SVM.jl")
 # using solve_alpha_with_sum_constraint
 
+seed = 123
+Random.seed!(seed);
+dataset_names = ["iris"]
 
-Random.seed!(1234);
+gs1 = [];
+gss = [];
+gsq = [];
 
-# IRIS dataset
-iris = dataset("datasets", "iris")
-# Convert the dataset to a DataFrame for easier manipulation
-iris_df = DataFrame(iris)
-
-# Select two classes for binary classification, e.g., "Setosa" and "Versicolor"
-class1 = "setosa"
-class2 = "versicolor"
-
-# Create a binary classification dataset
-binary_df = vcat(iris_df[iris_df[:, :Species].==class1, :], iris_df[iris_df[:, :Species].==class2, :])
-
-# Shuffle the binary dataset
-binary_df = binary_df[shuffle(1:end), :]
-
-# Split the binary dataset into training and testing sets as before
-train_percentage = 0.7
-train_size = Int(round(train_percentage * size(binary_df, 1)))
-
-X_train = Matrix(binary_df[1:train_size, 1:4])  # Features
-y_train = Vector(binary_df[1:train_size, :Species] .== class1)  # Binary labels: Setosa (true) or Versicolor (false)
-X_test = Matrix(binary_df[train_size+1:end, 1:4])
-y_test = Vector(binary_df[train_size+1:end, :Species] .== class1)
-
-dt = fit(ZScoreTransform, X_train, dims=2)
-X_train = StatsBase.transform(dt, X_train)
-
-dt = fit(ZScoreTransform, X_test, dims=2)
-X_test = StatsBase.transform(dt, X_test)
-
-# Convert negative labels to -1
-y_train = Int.(y_train)
-y_test = Int.(y_test)
-
-y_train[y_train.==0] .= -1
-y_test[y_test.==0] .= -1
 
 # # heart disease data
 # # Load the dataset
@@ -84,12 +57,6 @@ y_test[y_test.==0] .= -1
 
 
 
-
-# define some parameters
-n = size(X_train, 1)
-d = size(X_train, 2)
-trackIter = 1
-include("GS1_svm.jl")
 
 function svm_dual_objective(X, y, alpha)
     n = size(X, 1)
@@ -328,101 +295,78 @@ function svm_predict_kernel(X_support, y_support, alphas, b, X_test; kernel=rbf_
     return y_pred
 end
 
-function main()
+function main_GSQ()
+    for dataset_name in dataset_names
+        trackIter = 1
+        maxIter = 100
+        X_train, y_train, X_test, y_test = load_and_preprocess_dataset(dataset_name)
+        # Dual SVM block coordinate descent with linear equality and box constraint
 
-    # Dual SVM block coordinate descent with linear equality and box constraint
+        # Find the initial value of alpha 
+        C = 1.0
+        alpha0 = solve_alpha_with_sum_constraint(C, y_train)
+        # alpha0 = zeros(n, z)
+        alpha0 = reshape(alpha0, :, 1)
+        alpha = copy(alpha0)
 
-    # Find the initial value of alpha 
-    C = 1.0
-    alpha = solve_alpha_with_sum_constraint(C, y_train)
-    alpha = reshape(alpha, :, 1)
+        # Initialize q based on alpha
+        q = alpha .* y_train
+        lower = 0
+        upper = C
+        # gamma = 1 / length(X_train)
+        gamma = 0.5
 
-    # Initialize q based on alpha
-    q = alpha .* y_train
-    lower = 0
-    upper = C
-    maxIter = 100
-    # gamma = 1 / length(X_train)
-    gamma = 0.5
-    # f(alpha) = sum(alpha[i] for i in 1:n) - 0.5 * sum(alpha[i] * alpha[j] * y[i] * y[j] * (X[i, :] ⋅ X[j, :]) for i in 1:n, j in 1:n) - lambda * sum(alpha)
+        # use the kernel implementation
+        K = rbf_kernel(X_train, X_train, gamma)
+        f(alpha) = svm_dual_objective_kernel(K, y_train, alpha)
+        g(alpha) = svm_dual_gradient_kernel(K, y_train, alpha)
+        g_q(q) = grad_q_kernel(K, y_train, q)
 
-    # Use the non-kernel implementation
-    # f(alpha) = svm_dual_objective(X_train, y_train, alpha)
-    # g(alpha) = svm_dual_gradient(X_train, y_train, alpha)
-    # g_q(q) = grad_q(X_train, y_train, q)
+        # g(alpha) = ones(n) - Y * (X * X') * alpha - lambda * ones(n)
+        # g(q) = ones(n) - Y * (X * X') * (q ./ y) - lambda * ones(n)
+        # Compute L 
+        E = eigen(X_train' * X_train)
+        L = maximum(E.values)
+        Li = diag(X_train' * X_train)
+        L2 = 2 * maximum(Li)
 
-
-    # use the kernel implementation
-    K = rbf_kernel(X_train, X_train, gamma)
-    f(alpha) = svm_dual_objective_kernel(K, y_train, alpha)
-    g(alpha) = svm_dual_gradient_kernel(K, y_train, alpha)
-    g_q(q) = grad_q_kernel(K, y_train, q)
-
-    # g(alpha) = ones(n) - Y * (X * X') * alpha - lambda * ones(n)
-    # g(q) = ones(n) - Y * (X * X') * (q ./ y) - lambda * ones(n)
-    # Compute L 
-    E = eigen(X_train' * X_train)
-    L = maximum(E.values)
-    Li = diag(X_train' * X_train)
-    L2 = 2 * maximum(Li)
-    gs1 = []
-    count_gs1 = []
-    total_gs1 = []
-    push!(gs1, f(alpha))
-
-    # lb = ones(length(alpha)) .* -Inf
-    # ub = ones(length(alpha)) .* Inf
-    for i in 1:maxIter
-        # grad = g(alpha)
-        grad_q = g_q(q)
-        # grad = dropdims(grad, dims=2)
-        GS1_interior = 0
-        gs1_tc = 0
-        alphahat, localq, GS1_interior, gs1_tc = GS1_project(q, grad_q, L2 / 2, lower, upper, y_train)
-        alpha[:] = Float64.(alphahat[:])
-        q[:] = localq[:]
-        push!(count_gs1, GS1_interior)
-        push!(total_gs1, gs1_tc)
-
-        if mod(i, trackIter) == 0
-            @printf("Iteration %d, Function = %f\n", i, f(alpha))
-            # push!(gs1, f(w) - fStar)
-            push!(gs1, f(alpha))
+        # Running GSq
+        alpha = copy(alpha0)
+        # Initialize q based on alpha
+        q = alpha .* y_train
+        # use the kernel implementation
+        K = rbf_kernel(X_train, X_train, gamma)
+        f(alpha) = svm_dual_objective_kernel(K, y_train, alpha)
+        g(alpha) = svm_dual_gradient_kernel(K, y_train, alpha)
+        g_q(q) = grad_q_kernel(K, y_train, q)
+        push!(gsq, f(alpha))
+        for i in 1:maxIter
+            grad_q = g_q(q)
+            alphahat, localq = GSq_project(q, grad_q, L2/2, lower, upper, y_train)
+            alpha[:] = Float64.(alphahat[:])
+            q[:] = localq[:]
+            if mod(i, trackIter) == 0
+                @printf("Iteration %d, Function = %f\n", i, f(alpha))
+                # push!(gs1, f(w) - fStar)
+                push!(gsq, f(alpha))
+            end
         end
+        support_vectors_GSQ = findall(alpha .> 1e-6)
+        # Print results
+        println("Number of support vectors by GSq: ", length(support_vectors_GSQ))
+
+        # now compute the predictions
+        X_support, y_support = get_support_vectors(X_train, y_train, alpha; threshold=1e-6)
+        b = compute_bias(X_support, y_support, alpha)
+        train_y_predicted_gsq = svm_predict_kernel(X_support, y_support, alpha[support_vectors_GSQ], b, X_train)
+        correct_predictions_train_gsq = sum(train_y_predicted_gsq .== y_train)
+        accuracy_train_gsq = correct_predictions_train_gsq / length(y_train)
+        println("Train accuracy: ", accuracy_train_gsq)
+
+        y_predicted = svm_predict_kernel(X_support, y_support, alpha[support_vectors_GSQ], b, X_test)
+        correct_predictions_test = sum(y_predicted .== y_test)
+        accuracy_test = correct_predictions_test / length(y_test)
+        println("Test accuracy: ", accuracy_test)
+        return gsq, accuracy_train_gsq, accuracy_test    
     end
-
-    support_vectors = findall(alpha .> 1e-6)
-    # Print results
-    println("Number of support vectors by GS1: ", length(support_vectors))
-
-    # now compute the predictions
-    X_support, y_support = get_support_vectors(X_train, y_train, alpha; threshold=1e-6)
-    b = compute_bias(X_support, y_support, alpha)
-
-    # train_y_predicted = svm_predict(X_support, y_support, alpha, b, X_train) # using non-kernel implementations
-    # K_train = rbf_kernel(X_support, X_train, gamma)
-    # train_y_predicted = svm_predict_kernel(K_train, y_support, alpha, b)
-    train_y_predicted = svm_predict_kernel(X_support, y_support, alpha[support_vectors], b, X_train)
-    correct_predictions_train = sum(train_y_predicted .== y_train)
-    accuracy_train = correct_predictions_train / length(y_train)
-    println("Train accuracy: ", accuracy_train)
-
-    # y_predicted = svm_predict(X_support, y_support, alpha, b, X_test) # using the non-kernel implementation
-    # K_test = rbf_kernel(X_support, X_test, gamma)
-    # y_predicted = svm_predict_kernel(K_test, y_support, alpha, b)
-    y_predicted = svm_predict_kernel(X_support, y_support, alpha[support_vectors], b, X_test)
-    correct_predictions_test = sum(y_predicted .== y_test)
-    accuracy_test = correct_predictions_test / length(y_test)
-    println("Test accuracy: ", accuracy_test)
-
-    # Compare with LIBSVM
-    # Define class weights for each class
-    class_weights = Dict(1 => 1.0, -1 => 1.0)  # Example weights, adjust as needed
-
-    svm_model = svmtrain(X_train', y_train, gamma=0.5, weights=class_weights)
-    y_pred_svm, decision_values = svmpredict(svm_model, X_test')
-    LIBsvm_test_acc = sum(y_pred_svm .== y_test) / length(y_test)
-    println("Test accuracy LibSVM SVM: ", LIBsvm_test_acc)
 end
-
-main()
